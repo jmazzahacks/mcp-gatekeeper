@@ -289,8 +289,22 @@ def main() -> None:
         flush=True,
     )
 
+    # MCP_GATEKEEPER_LOKI_APP_TAG lets an operator override the Loki
+    # `application` label without rebuilding the image — useful when
+    # debugging "logs vanish silently under a specific tag" scenarios
+    # (Loki tenant filters, Promtail relabel rules, etc.). Default
+    # keeps the documented behavior; set to e.g. "mcp-gatekeeper-v2"
+    # to confirm tag-specific filtering at the ingest layer.
+    app_tag = os.environ.get("MCP_GATEKEEPER_LOKI_APP_TAG", "mcp-gatekeeper")
+    print(
+        f"[startup-diag] application_tag={app_tag!r} "
+        f"(override env=MCP_GATEKEEPER_LOKI_APP_TAG)",
+        file=_sys.stderr,
+        flush=True,
+    )
+
     configure_logging(
-        application_tag="mcp-gatekeeper",
+        application_tag=app_tag,
         debug_local=debug_mode,
         local_level=log_level,
     )
