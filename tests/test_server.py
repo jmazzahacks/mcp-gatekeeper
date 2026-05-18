@@ -43,27 +43,53 @@ def stub_client(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return stub
 
 
-async def test_show_client_finds_by_client_id(stub_client: AsyncMock) -> None:
+class _StubContext:
+    """Stub Context where `request_context.request` raises AttributeError.
+
+    Tools call _caller_from(ctx) which handles AttributeError by returning
+    (None, None) — same fallback path used at runtime for stdio transport.
+    Keeps tool-logic tests independent of Context's request internals."""
+
+    class _RC:
+        @property
+        def request(self) -> object:
+            raise AttributeError("no request in test stub")
+
+    @property
+    def request_context(self) -> "_StubContext._RC":
+        return _StubContext._RC()
+
+
+@pytest.fixture
+def fake_ctx() -> _StubContext:
+    return _StubContext()
+
+
+async def test_show_client_finds_by_client_id(
+    stub_client: AsyncMock, fake_ctx: "_StubContext"
+) -> None:
     stub_client.list_clients.return_value = [
         _make_client_summary("abc", client_name="the-one"),
         _make_client_summary("xyz", client_name="other"),
     ]
-    result = await show_client("abc")
+    result = await show_client("abc", fake_ctx)
     assert isinstance(result, ClientSummary)
     assert result.client_id == "abc"
     assert result.client_name == "the-one"
 
 
-async def test_show_client_raises_when_not_found(stub_client: AsyncMock) -> None:
+async def test_show_client_raises_when_not_found(
+    stub_client: AsyncMock, fake_ctx: "_StubContext"
+) -> None:
     stub_client.list_clients.return_value = [
         _make_client_summary("other"),
     ]
     with pytest.raises(ValueError, match="no client with id 'missing'"):
-        await show_client("missing")
+        await show_client("missing", fake_ctx)
 
 
 async def test_show_client_returns_first_match_when_duplicates(
-    stub_client: AsyncMock,
+    stub_client: AsyncMock, fake_ctx: "_StubContext",
 ) -> None:
     # Edge case: if the gatekeeper ever returns two records with the same id
     # (it shouldn't, but defending the loop's first-match semantics).
@@ -71,7 +97,7 @@ async def test_show_client_returns_first_match_when_duplicates(
         _make_client_summary("abc", client_name="first"),
         _make_client_summary("abc", client_name="second"),
     ]
-    result = await show_client("abc")
+    result = await show_client("abc", fake_ctx)
     assert result.client_name == "first"
 
 
