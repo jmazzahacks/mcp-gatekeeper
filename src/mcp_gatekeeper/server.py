@@ -41,6 +41,42 @@ def _client() -> GatekeeperClient:
     return _CLIENT
 
 
+def _diag_root_handler(label: str) -> None:
+    """Bypass the logging system and print the live state of root.handlers[0].
+
+    Records id(handler) so we can detect handler-reinstantiation across calls,
+    listener-thread liveness, and queue diagnostics. Used during the Loki-
+    silence investigation — if the listener is dead OR the queue is filling
+    without draining, records are vanishing inside the handler.
+    """
+    import sys as _sys
+    root = logging.getLogger()
+    handlers = root.handlers
+    h = handlers[0] if handlers else None
+    listener_alive = "n/a"
+    diagnostics = "n/a"
+    if h is not None:
+        listener = getattr(h, "listener", None)
+        if listener is not None:
+            thread = getattr(listener, "_thread", None)
+            listener_alive = thread.is_alive() if thread is not None else "no-thread-attr"
+        if hasattr(h, "get_diagnostics"):
+            try:
+                diagnostics = h.get_diagnostics()
+            except Exception as exc:
+                diagnostics = f"<get_diagnostics raised {type(exc).__name__}>"
+    print(
+        f"[startup-diag] {label} "
+        f"handler_count={len(handlers)} "
+        f"first_class={type(h).__name__ if h else None} "
+        f"handler_id={id(h) if h else None} "
+        f"listener_alive={listener_alive} "
+        f"diagnostics={diagnostics}",
+        file=_sys.stderr,
+        flush=True,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastMCP) -> AsyncIterator[None]:
     """Construct the HTTP client at server start, close it cleanly at stop.
@@ -51,19 +87,12 @@ async def lifespan(_: FastMCP) -> AsyncIterator[None]:
     is loaded here (not at import time) so importing this module from tests
     or tooling doesn't require GATEKEEPER_BASE_URL/TOKEN to be set.
     """
-    # Diagnostic — print bypasses the logging system entirely so it lands
-    # in docker stdout no matter what state root's handler chain is in.
-    # Fires inside uvicorn's startup, AFTER its dictConfig(log_config). If
-    # the SafeLokiQueueHandler isn't here, configure_logging's setup didn't
-    # survive uvicorn's logging config load.
-    import sys as _sys
-    _root_handlers = logging.getLogger().handlers
-    print(
-        f"[startup-diag] post-uvicorn-dictConfig root handlers: "
-        f"{[type(h).__module__ + '.' + type(h).__name__ for h in _root_handlers]}",
-        file=_sys.stderr,
-        flush=True,
-    )
+    # In stateless_http=True mode this lifespan fires PER REQUEST (not just
+    # once at server startup). Each firing records handler identity + listener
+    # state — if the handler_id changes across firings, dictConfig OR something
+    # else is reinstantiating the handler per request and the new instance
+    # has no listener thread.
+    _diag_root_handler("lifespan-enter (stateless: fires per-session)")
 
     global _CLIENT
     config = Config.from_env()
@@ -175,6 +204,10 @@ async def list_clients(ctx: Context) -> list[ClientSummary]:
     updated_at (unix seconds). Shared secrets and full API keys are NEVER
     returned — the gatekeeper redacts them server-side.
     """
+    # Fires DURING a tool call — captures handler state at exactly the moment
+    # we expect log records to be flowing. If diagnostics shows queue_size
+    # growing here, the listener thread isn't draining.
+    _diag_root_handler("tool list_clients invoked")
     async with _LogToolCall("list_clients", ctx):
         return await _client().list_clients()
 
@@ -247,10 +280,7 @@ def main() -> None:
     debug_mode = os.environ.get("DEBUG_LOCAL", "true").lower() == "true"
     log_level = os.environ.get("LOG_LEVEL", "INFO")
 
-    # Diagnostic — print bypasses the logging system entirely so it lands
-    # in docker stdout no matter what state things are in. Fires BEFORE
-    # configure_logging(). Together with the post-dictConfig diag in
-    # lifespan(), this lets us bisect where the handler chain breaks.
+    # Bypass-the-logging-system diagnostic, fires before configure_logging.
     import sys as _sys
     print(
         f"[startup-diag] main() entry: DEBUG_LOCAL={debug_mode} "
@@ -259,20 +289,13 @@ def main() -> None:
         flush=True,
     )
 
-    handler_returned = configure_logging(
+    configure_logging(
         application_tag="mcp-gatekeeper",
         debug_local=debug_mode,
         local_level=log_level,
     )
 
-    _root_handlers = logging.getLogger().handlers
-    print(
-        f"[startup-diag] post-configure_logging: "
-        f"returned={type(handler_returned).__name__ if handler_returned else None} "
-        f"root_handlers={[type(h).__module__ + '.' + type(h).__name__ for h in _root_handlers]}",
-        file=_sys.stderr,
-        flush=True,
-    )
+    _diag_root_handler("post-configure_logging (fires once at startup)")
 
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
     # inside lifespan() — Config.from_env() runs again there but env is stable
