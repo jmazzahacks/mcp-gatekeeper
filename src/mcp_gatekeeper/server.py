@@ -311,6 +311,32 @@ def main() -> None:
 
     _diag_root_handler("post-configure_logging (fires once at startup)")
 
+    # Startup self-test for the deployed-PID-1-can't-reach-Loki investigation
+    # (Janus admin question #5). Emit ONE record from ONE logger with a
+    # known unique marker, then force a synchronous flush of the underlying
+    # batch handler. If this record appears in Loki under application=<tag>
+    # the lib+net path works in PID 1 and the issue is multi-stream batches.
+    # If it doesn't, deployed PID 1 isn't shipping at all, period.
+    if not debug_mode:
+        import time as _time
+        _marker = f"selftest-{int(_time.time())}-{os.getpid()}"
+        print(f"[startup-diag] LOKI SELF-TEST marker={_marker} tag={app_tag}", file=_sys.stderr, flush=True)
+        logging.getLogger("mcp_gatekeeper.selftest").info(
+            "loki_selftest", extra={"marker": _marker, "phase": "startup"}
+        )
+        # Force the queue listener to drain into LokiBatchHandler, then flush
+        # the batch synchronously so the record can't be sitting in a buffer.
+        _time.sleep(0.5)
+        _root_handlers = logging.getLogger().handlers
+        for _h in _root_handlers:
+            if hasattr(_h, "flush"):
+                try:
+                    _h.flush()
+                except Exception as _e:
+                    print(f"[startup-diag] LOKI SELF-TEST flush raised: {type(_e).__name__}: {_e}", file=_sys.stderr, flush=True)
+        _time.sleep(0.5)
+        print(f"[startup-diag] LOKI SELF-TEST flush complete; marker={_marker} should now be in Loki", file=_sys.stderr, flush=True)
+
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
     # inside lifespan() — Config.from_env() runs again there but env is stable
     # so both calls see the same values.
