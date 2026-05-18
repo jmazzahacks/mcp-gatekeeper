@@ -26,6 +26,12 @@ Surfaces gatekeeper's `/api/admin` GET endpoints as MCP tools so an LLM client c
 | `MCP_PORT` | no | `7872` | Port for streamable-http/sse. |
 | `FASTMCP_HOST` | no | `127.0.0.1` | FastMCP-specific alias. **Must be set** alongside `MCP_HOST` because FastMCP's pydantic-settings defaults override generic `MCP_HOST` otherwise. |
 | `FASTMCP_PORT` | no | `7872` | FastMCP-specific alias — same precedence quirk as `FASTMCP_HOST`. |
+| `DEBUG_LOCAL` | no | `true` | `true` = console logs. `false` = ship structured JSON to Loki under `application=mcp-gatekeeper`. Falls back to stdout if Loki is unreachable. |
+| `LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
+| `LOKI_ENDPOINT` | only if `DEBUG_LOCAL=false` | — | e.g. `https://loki.example.com/loki/api/v1/push` |
+| `LOKI_USER` | only if `DEBUG_LOCAL=false` | — | HTTP Basic auth user. |
+| `LOKI_PASSWORD` | only if `DEBUG_LOCAL=false` | — | HTTP Basic auth password. |
+| `LOKI_CA_BUNDLE_PATH` | only if `DEBUG_LOCAL=false` and Loki uses a private CA | — | Path inside the container, e.g. `/app/certs/loki-ca.pem`. Set to `false` to skip TLS verification (not recommended). |
 
 ## Run locally (stdio, for use with Claude Code / similar)
 

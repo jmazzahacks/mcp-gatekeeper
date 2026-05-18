@@ -9,6 +9,7 @@ Python client) so that the gatekeeper API contract has a single source of
 truth across consumers.
 """
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ from api_gatekeeper_models import (
     RateLimitSummary,
     Route,
 )
+from byteforge_loki_logging import configure_logging
 from mcp.server.fastmcp import FastMCP
 
 from mcp_gatekeeper.config import Config, read_bind
@@ -148,10 +150,25 @@ async def show_client(client_id: str) -> ClientSummary:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # Loki logging via byteforge-loki-logging. Modes:
+    #   DEBUG_LOCAL=true  — console logs only (local dev, no Loki connection)
+    #   DEBUG_LOCAL=false — async structured JSON shipped to Loki under the
+    #                        application=mcp-gatekeeper label, with stdout
+    #                        fallback if Loki is unreachable at startup
+    # The Loki label `application` (NOT `service` or `app`) matches the rest
+    # of the api-gatekeeper deployment so filters like
+    # `{application=~"api-gatekeeper|mcp-gatekeeper"}` work across services.
+    #
+    # Replaces the previous logging.basicConfig() — configure_logging()
+    # installs its own handler on the root logger.
+    debug_mode = os.environ.get("DEBUG_LOCAL", "true").lower() == "true"
+    log_level = os.environ.get("LOG_LEVEL", "INFO")
+    configure_logging(
+        application_tag="mcp-gatekeeper",
+        debug_local=debug_mode,
+        local_level=log_level,
     )
+
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
     # inside lifespan() — Config.from_env() runs again there but env is stable
     # so both calls see the same values.

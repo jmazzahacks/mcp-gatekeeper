@@ -7,6 +7,12 @@ services:
       # Bind only to localhost — nginx terminates TLS and proxies to here.
       # If you're not running nginx in front, change to "7872:7872".
       - "127.0.0.1:7872:7872"
+    volumes:
+      # Loki CA cert mounted read-only. Replace the host path with wherever
+      # your Loki origin CA lives. Required when LOKI_CA_BUNDLE_PATH is set
+      # below — drop this volume + the env var if your Loki uses a publicly-
+      # trusted cert.
+      - ./certs/loki-ca.pem:/app/certs/loki-ca.pem:ro
     # GATEKEEPER_BASE_URL and GATEKEEPER_ADMIN_TOKEN come from .env. The
     # `env_file:` directive makes that dependency explicit — compose ALSO
     # auto-loads ./.env for ${VAR} interpolation, but operators who don't
@@ -26,3 +32,14 @@ services:
       # MCP_TRANSPORT: "streamable-http"
       # MCP_PORT: "7872"
       # FASTMCP_PORT: "7872"
+      #
+      # --- Logging: ship structured JSON to Loki under the
+      # `application=mcp-gatekeeper` label. Set DEBUG_LOCAL=true if you
+      # want console logs instead (useful for first-time setup before
+      # Loki credentials are wired up).
+      DEBUG_LOCAL: "false"
+      LOG_LEVEL: "INFO"
+      LOKI_ENDPOINT: "${LOKI_ENDPOINT}"
+      LOKI_USER: "${LOKI_USER}"
+      LOKI_PASSWORD: "${LOKI_PASSWORD}"
+      LOKI_CA_BUNDLE_PATH: "/app/certs/loki-ca.pem"
