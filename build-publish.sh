@@ -36,6 +36,10 @@ echo "Building ${REGISTRY}:${NEXT_VERSION}..."
 # `$? -ne 0` blocks needed. Add new steps freely without worrying about
 # whether you remembered to error-check them.
 
+# --platform linux/amd64 is intentional, NOT a leftover. Production runs on
+# amd64 hosts; arm64 contributors (M-series Macs, ARM cloud) will get an
+# emulated build — that's correct, do not remove this flag. Matches the
+# convention used by gatekeeper-backend/build-publish.sh.
 docker build \
     --platform linux/amd64 \
     $NO_CACHE \

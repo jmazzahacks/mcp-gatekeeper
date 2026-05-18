@@ -21,7 +21,7 @@ def read_bind() -> tuple[str, int]:
     except ValueError:
         raise RuntimeError(
             f"MCP_PORT/FASTMCP_PORT must be an integer, got: {port_raw!r}"
-        )
+        ) from None
     return host, port
 
 
@@ -55,7 +55,7 @@ class Config:
         except ValueError:
             raise RuntimeError(
                 f"GATEKEEPER_REQUEST_TIMEOUT_SECONDS must be a number, got: {timeout_raw!r}"
-            )
+            ) from None
 
         transport = os.environ.get("MCP_TRANSPORT", "stdio")
         if transport not in {"stdio", "streamable-http", "sse"}:
