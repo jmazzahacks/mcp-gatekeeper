@@ -10,8 +10,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy package metadata + source, then install. Doing it in two layers keeps
-# code edits from invalidating the dependency layer.
-COPY pyproject.toml README.md ./
+# code edits from invalidating the dependency layer. LICENSE is required by
+# `license = {file = "LICENSE"}` in pyproject.toml — hatchling reads it
+# during metadata generation, so the install fails if it's missing.
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 
 RUN pip install --no-cache-dir . \

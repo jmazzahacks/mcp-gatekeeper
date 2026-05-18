@@ -21,7 +21,9 @@ nginx/
 docker-compose.example.yml
 env.example
 CLAUDE.md
-LICENSE
+# LICENSE is required by `license = {file = "LICENSE"}` in pyproject.toml
+# — hatchling reads it during metadata generation, so it must be in the
+# build context. ~1KB; not worth excluding.
 .vscode/
 .idea/
 *.swp
