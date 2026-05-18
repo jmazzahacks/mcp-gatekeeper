@@ -51,6 +51,20 @@ async def lifespan(_: FastMCP) -> AsyncIterator[None]:
     is loaded here (not at import time) so importing this module from tests
     or tooling doesn't require GATEKEEPER_BASE_URL/TOKEN to be set.
     """
+    # Diagnostic — print bypasses the logging system entirely so it lands
+    # in docker stdout no matter what state root's handler chain is in.
+    # Fires inside uvicorn's startup, AFTER its dictConfig(log_config). If
+    # the SafeLokiQueueHandler isn't here, configure_logging's setup didn't
+    # survive uvicorn's logging config load.
+    import sys as _sys
+    _root_handlers = logging.getLogger().handlers
+    print(
+        f"[startup-diag] post-uvicorn-dictConfig root handlers: "
+        f"{[type(h).__module__ + '.' + type(h).__name__ for h in _root_handlers]}",
+        file=_sys.stderr,
+        flush=True,
+    )
+
     global _CLIENT
     config = Config.from_env()
     _CLIENT = GatekeeperClient(
@@ -232,10 +246,32 @@ def main() -> None:
     # installs its own handler on the root logger.
     debug_mode = os.environ.get("DEBUG_LOCAL", "true").lower() == "true"
     log_level = os.environ.get("LOG_LEVEL", "INFO")
-    configure_logging(
+
+    # Diagnostic — print bypasses the logging system entirely so it lands
+    # in docker stdout no matter what state things are in. Fires BEFORE
+    # configure_logging(). Together with the post-dictConfig diag in
+    # lifespan(), this lets us bisect where the handler chain breaks.
+    import sys as _sys
+    print(
+        f"[startup-diag] main() entry: DEBUG_LOCAL={debug_mode} "
+        f"LOG_LEVEL={log_level}",
+        file=_sys.stderr,
+        flush=True,
+    )
+
+    handler_returned = configure_logging(
         application_tag="mcp-gatekeeper",
         debug_local=debug_mode,
         local_level=log_level,
+    )
+
+    _root_handlers = logging.getLogger().handlers
+    print(
+        f"[startup-diag] post-configure_logging: "
+        f"returned={type(handler_returned).__name__ if handler_returned else None} "
+        f"root_handlers={[type(h).__module__ + '.' + type(h).__name__ for h in _root_handlers]}",
+        file=_sys.stderr,
+        flush=True,
     )
 
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
