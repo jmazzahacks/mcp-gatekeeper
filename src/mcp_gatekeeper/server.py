@@ -41,59 +41,16 @@ def _client() -> GatekeeperClient:
     return _CLIENT
 
 
-def _diag_root_handler(label: str) -> None:
-    """Bypass the logging system and print the live state of root.handlers[0].
-
-    Records id(handler) so we can detect handler-reinstantiation across calls,
-    listener-thread liveness, and queue diagnostics. Used during the Loki-
-    silence investigation — if the listener is dead OR the queue is filling
-    without draining, records are vanishing inside the handler.
-    """
-    import sys as _sys
-    root = logging.getLogger()
-    handlers = root.handlers
-    h = handlers[0] if handlers else None
-    listener_alive = "n/a"
-    diagnostics = "n/a"
-    if h is not None:
-        listener = getattr(h, "listener", None)
-        if listener is not None:
-            thread = getattr(listener, "_thread", None)
-            listener_alive = thread.is_alive() if thread is not None else "no-thread-attr"
-        if hasattr(h, "get_diagnostics"):
-            try:
-                diagnostics = h.get_diagnostics()
-            except Exception as exc:
-                diagnostics = f"<get_diagnostics raised {type(exc).__name__}>"
-    print(
-        f"[startup-diag] {label} "
-        f"handler_count={len(handlers)} "
-        f"first_class={type(h).__name__ if h else None} "
-        f"handler_id={id(h) if h else None} "
-        f"listener_alive={listener_alive} "
-        f"diagnostics={diagnostics}",
-        file=_sys.stderr,
-        flush=True,
-    )
-
-
 @asynccontextmanager
 async def lifespan(_: FastMCP) -> AsyncIterator[None]:
     """Construct the HTTP client at server start, close it cleanly at stop.
 
-    Replaces the previous lazy-init pattern. `aclose()` in `finally` prevents
-    the "Unclosed client session" ResourceWarning on SIGTERM and avoids
-    connection-pool leaks if the process is ever restarted in-place. Config
-    is loaded here (not at import time) so importing this module from tests
-    or tooling doesn't require GATEKEEPER_BASE_URL/TOKEN to be set.
+    Note: in `stateless_http=True` mode FastMCP fires this per session, not
+    once at server startup. That's fine — `GatekeeperClient.__init__` is
+    cheap (no network) and `aclose()` is idempotent. Config is loaded here
+    (not at import time) so importing this module from tests or tooling
+    doesn't require GATEKEEPER_BASE_URL/ADMIN_API_KEY to be set.
     """
-    # In stateless_http=True mode this lifespan fires PER REQUEST (not just
-    # once at server startup). Each firing records handler identity + listener
-    # state — if the handler_id changes across firings, dictConfig OR something
-    # else is reinstantiating the handler per request and the new instance
-    # has no listener thread.
-    _diag_root_handler("lifespan-enter (stateless: fires per-session)")
-
     global _CLIENT
     config = Config.from_env()
     _CLIENT = GatekeeperClient(
@@ -204,10 +161,6 @@ async def list_clients(ctx: Context) -> list[ClientSummary]:
     updated_at (unix seconds). Shared secrets and full API keys are NEVER
     returned — the gatekeeper redacts them server-side.
     """
-    # Fires DURING a tool call — captures handler state at exactly the moment
-    # we expect log records to be flowing. If diagnostics shows queue_size
-    # growing here, the listener thread isn't draining.
-    _diag_root_handler("tool list_clients invoked")
     async with _LogToolCall("list_clients", ctx):
         return await _client().list_clients()
 
@@ -271,119 +224,28 @@ def main() -> None:
     #   DEBUG_LOCAL=false — async structured JSON shipped to Loki under the
     #                        application=mcp-gatekeeper label, with stdout
     #                        fallback if Loki is unreachable at startup
-    # The Loki label `application` (NOT `service` or `app`) matches the rest
-    # of the api-gatekeeper deployment so filters like
-    # `{application=~"api-gatekeeper|mcp-gatekeeper"}` work across services.
     #
-    # Replaces the previous logging.basicConfig() — configure_logging()
-    # installs its own handler on the root logger.
+    # The Loki label `application` (NOT `service` or `app`) matches the rest
+    # of the api-gatekeeper deployment so cross-service queries like
+    # `{application=~"api-gatekeeper|mcp-gatekeeper"}` work in Grafana.
+    #
+    # Requires byteforge-loki-logging >= 0.1.3 — earlier versions silently
+    # lost records when uvicorn's dictConfig closed the lib's batch handler
+    # mid-startup (target=None side-effect of stdlib MemoryHandler.close).
     debug_mode = os.environ.get("DEBUG_LOCAL", "true").lower() == "true"
     log_level = os.environ.get("LOG_LEVEL", "INFO")
 
-    # Bypass-the-logging-system diagnostic, fires before configure_logging.
-    import sys as _sys
-    print(
-        f"[startup-diag] main() entry: DEBUG_LOCAL={debug_mode} "
-        f"LOG_LEVEL={log_level}",
-        file=_sys.stderr,
-        flush=True,
-    )
-
     # MCP_GATEKEEPER_LOKI_APP_TAG lets an operator override the Loki
     # `application` label without rebuilding the image — useful when
-    # debugging "logs vanish silently under a specific tag" scenarios
-    # (Loki tenant filters, Promtail relabel rules, etc.). Default
-    # keeps the documented behavior; set to e.g. "mcp-gatekeeper-v2"
-    # to confirm tag-specific filtering at the ingest layer.
+    # debugging tag-specific routing or tenant filters at the Loki layer.
+    # Default matches the documented behavior.
     app_tag = os.environ.get("MCP_GATEKEEPER_LOKI_APP_TAG", "mcp-gatekeeper")
-    print(
-        f"[startup-diag] application_tag={app_tag!r} "
-        f"(override env=MCP_GATEKEEPER_LOKI_APP_TAG)",
-        file=_sys.stderr,
-        flush=True,
-    )
 
     configure_logging(
         application_tag=app_tag,
         debug_local=debug_mode,
         local_level=log_level,
     )
-
-    _diag_root_handler("post-configure_logging (fires once at startup)")
-
-    # Startup self-test for the deployed-PID-1-can't-reach-Loki investigation
-    # (Janus admin question #5). Emit ONE record from ONE logger with a
-    # known unique marker, then force a synchronous flush of the underlying
-    # batch handler. If this record appears in Loki under application=<tag>
-    # the lib+net path works in PID 1 and the issue is multi-stream batches.
-    # If it doesn't, deployed PID 1 isn't shipping at all, period.
-    if not debug_mode:
-        import time as _time
-        _marker = f"selftest-{int(_time.time())}-{os.getpid()}"
-        print(f"[startup-diag] LOKI SELF-TEST marker={_marker} tag={app_tag}", file=_sys.stderr, flush=True)
-        logging.getLogger("mcp_gatekeeper.selftest").info(
-            "loki_selftest", extra={"marker": _marker, "phase": "startup"}
-        )
-        # Force the queue listener to drain into LokiBatchHandler, then flush
-        # the batch synchronously so the record can't be sitting in a buffer.
-        _time.sleep(0.5)
-        _root_handlers = logging.getLogger().handlers
-        for _h in _root_handlers:
-            if hasattr(_h, "flush"):
-                try:
-                    _h.flush()
-                except Exception as _e:
-                    print(f"[startup-diag] LOKI SELF-TEST flush raised: {type(_e).__name__}: {_e}", file=_sys.stderr, flush=True)
-        _time.sleep(0.5)
-        print(f"[startup-diag] LOKI SELF-TEST flush complete; marker={_marker} should now be in Loki", file=_sys.stderr, flush=True)
-
-        # Spawn a thread that periodically introspects the LokiBatchHandler
-        # internals. The shouldFlush()-after-emit() trigger pattern means
-        # records pile up in LokiBatchHandler.buffer if no new records arrive
-        # to trigger a flush AND, more importantly, LokiHandler.handleError
-        # CLOSES the emitter on error — so a single failed flush poisons all
-        # subsequent flushes silently. This thread reports the inner buffer
-        # state, last-flush time, and emitter session state every 10s.
-        import threading as _threading
-        def _introspect_loki_handler() -> None:
-            while True:
-                _time.sleep(10)
-                try:
-                    root_handlers = logging.getLogger().handlers
-                    outer = root_handlers[0] if root_handlers else None
-                    if outer is None:
-                        print("[introspect] no root handler", file=_sys.stderr, flush=True)
-                        continue
-                    outer_q = outer.queue.qsize() if hasattr(outer, "queue") else "n/a"
-                    outer_enq = getattr(outer, "enqueued_count", "n/a")
-                    inner = getattr(outer, "handler", None)
-                    inner_buffer_len = len(getattr(inner, "buffer", []) or []) if inner else "n/a"
-                    inner_last_flush = getattr(inner, "_last_flush_time", "n/a") if inner else "n/a"
-                    inner_age = (_time.time() - inner_last_flush) if isinstance(inner_last_flush, (int, float)) else "n/a"
-                    target = getattr(inner, "target", None) if inner else None
-                    emitter = getattr(target, "emitter", None) if target else None
-                    session = getattr(emitter, "session", None) if emitter else None
-                    session_open = None
-                    if session is not None:
-                        # requests.Session doesn't have a 'closed' attribute, but
-                        # its adapters do via the connection pools. Best heuristic:
-                        # check that the session's adapters dict is non-empty.
-                        adapters = getattr(session, "adapters", None)
-                        session_open = bool(adapters) if adapters is not None else "unknown"
-                    print(
-                        f"[introspect] outer_qsize={outer_q} outer_enqueued={outer_enq} "
-                        f"inner_buffer_len={inner_buffer_len} "
-                        f"inner_last_flush_age_s={inner_age if not isinstance(inner_age, float) else round(inner_age, 2)} "
-                        f"emitter={'present' if emitter else 'None'} "
-                        f"session={'present' if session else 'None'} "
-                        f"session_open_heuristic={session_open}",
-                        file=_sys.stderr, flush=True,
-                    )
-                except Exception as _e:
-                    print(f"[introspect] raised {type(_e).__name__}: {_e}", file=_sys.stderr, flush=True)
-
-        _threading.Thread(target=_introspect_loki_handler, daemon=True, name="loki-introspect").start()
-        print("[startup-diag] introspection thread started (10s interval)", file=_sys.stderr, flush=True)
 
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
     # inside lifespan() — Config.from_env() runs again there but env is stable
