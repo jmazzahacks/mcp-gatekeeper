@@ -337,6 +337,54 @@ def main() -> None:
         _time.sleep(0.5)
         print(f"[startup-diag] LOKI SELF-TEST flush complete; marker={_marker} should now be in Loki", file=_sys.stderr, flush=True)
 
+        # Spawn a thread that periodically introspects the LokiBatchHandler
+        # internals. The shouldFlush()-after-emit() trigger pattern means
+        # records pile up in LokiBatchHandler.buffer if no new records arrive
+        # to trigger a flush AND, more importantly, LokiHandler.handleError
+        # CLOSES the emitter on error — so a single failed flush poisons all
+        # subsequent flushes silently. This thread reports the inner buffer
+        # state, last-flush time, and emitter session state every 10s.
+        import threading as _threading
+        def _introspect_loki_handler() -> None:
+            while True:
+                _time.sleep(10)
+                try:
+                    root_handlers = logging.getLogger().handlers
+                    outer = root_handlers[0] if root_handlers else None
+                    if outer is None:
+                        print("[introspect] no root handler", file=_sys.stderr, flush=True)
+                        continue
+                    outer_q = outer.queue.qsize() if hasattr(outer, "queue") else "n/a"
+                    outer_enq = getattr(outer, "enqueued_count", "n/a")
+                    inner = getattr(outer, "handler", None)
+                    inner_buffer_len = len(getattr(inner, "buffer", []) or []) if inner else "n/a"
+                    inner_last_flush = getattr(inner, "_last_flush_time", "n/a") if inner else "n/a"
+                    inner_age = (_time.time() - inner_last_flush) if isinstance(inner_last_flush, (int, float)) else "n/a"
+                    target = getattr(inner, "target", None) if inner else None
+                    emitter = getattr(target, "emitter", None) if target else None
+                    session = getattr(emitter, "session", None) if emitter else None
+                    session_open = None
+                    if session is not None:
+                        # requests.Session doesn't have a 'closed' attribute, but
+                        # its adapters do via the connection pools. Best heuristic:
+                        # check that the session's adapters dict is non-empty.
+                        adapters = getattr(session, "adapters", None)
+                        session_open = bool(adapters) if adapters is not None else "unknown"
+                    print(
+                        f"[introspect] outer_qsize={outer_q} outer_enqueued={outer_enq} "
+                        f"inner_buffer_len={inner_buffer_len} "
+                        f"inner_last_flush_age_s={inner_age if not isinstance(inner_age, float) else round(inner_age, 2)} "
+                        f"emitter={'present' if emitter else 'None'} "
+                        f"session={'present' if session else 'None'} "
+                        f"session_open_heuristic={session_open}",
+                        file=_sys.stderr, flush=True,
+                    )
+                except Exception as _e:
+                    print(f"[introspect] raised {type(_e).__name__}: {_e}", file=_sys.stderr, flush=True)
+
+        _threading.Thread(target=_introspect_loki_handler, daemon=True, name="loki-introspect").start()
+        print("[startup-diag] introspection thread started (10s interval)", file=_sys.stderr, flush=True)
+
     # Fail-fast on missing/invalid env vars. The HTTP client is created later,
     # inside lifespan() — Config.from_env() runs again there but env is stable
     # so both calls see the same values.
