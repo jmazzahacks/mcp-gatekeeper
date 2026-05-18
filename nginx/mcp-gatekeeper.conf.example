@@ -1,0 +1,136 @@
+# nginx vhost for mcp-gatekeeper on streamable-http transport.
+#
+# Drop this into /etc/nginx/sites-available/ on the host, symlink into
+# sites-enabled/, and replace mcp.example.com + the cert paths. The MCP
+# client URL becomes: https://mcp.example.com/mcp-gatekeeper/mcp
+#
+# AUTH MODEL — read this before deploying:
+# The MCP server itself does ZERO authentication. Anything that can reach
+# 127.0.0.1:7872 inside the host can read every credential/permission row
+# in the gatekeeper. nginx is the only gate. DO NOT bind the docker port
+# to 0.0.0.0 and DO NOT skip the auth block below.
+#
+# TOKEN STORAGE — the bearer token is stored in a separate file outside
+# this repo:
+#   /etc/nginx/snippets/mcp-gatekeeper-tokens.map      (mode 0640, root:nginx)
+# That file looks like:
+#   "Bearer <long-random-token-1>" 1;
+#   "Bearer <long-random-token-2>" 1;   # second token for zero-downtime rotation
+# Generate tokens with: openssl rand -base64 48
+# Rotate by adding the new token, restarting all clients, then removing the old.
+#
+# WHY map+rate-limit instead of `if ($http_authorization != ...)`:
+# nginx `if` inside `location` interacts unpredictably with rewrite/proxy
+# phases ("if is evil") AND `!=` is a non-constant-time byte compare —
+# response-time deltas leak the token character by character. Wrapping the
+# token set in a `map` avoids both problems, and `limit_req` makes timing
+# brute-force impractical.
+
+# ── http{} context — these directives MUST be at file top so they live in
+# ── the http context when included from /etc/nginx/sites-enabled/.
+
+# Rate-limit unauthenticated requests by client IP — 5 req/s sustained,
+# burst of 10. Set tight because the only legitimate traffic is MCP
+# clients (one persistent connection each).
+limit_req_zone $binary_remote_addr zone=mcp_auth:10m rate=5r/s;
+
+# Map of accepted Authorization headers to "valid" (1). The actual token
+# values live OUTSIDE the repo in the include file. Anything not matched
+# falls through to the default (0) and gets rejected.
+map $http_authorization $mcp_auth_ok {
+    default 0;
+    include /etc/nginx/snippets/mcp-gatekeeper-tokens.map;
+}
+
+server {
+    listen 80;
+    server_name mcp.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name mcp.example.com;
+
+    # TLS
+    ssl_certificate     /etc/letsencrypt/live/mcp.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mcp.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:MCPgk:10m;
+    ssl_session_timeout 1d;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    location /mcp-gatekeeper/ {
+        # Rate-limit BEFORE the auth check so 401-spamming attackers
+        # are throttled, not just legitimate retries.
+        limit_req zone=mcp_auth burst=10 nodelay;
+
+        # Only the explicitly-allowed `if` shape (single return) is safe
+        # per the nginx docs. $mcp_auth_ok is 1 iff the Authorization
+        # header matched an entry in the tokens.map include.
+        if ($mcp_auth_ok = 0) {
+            return 401;
+        }
+
+        # Don't forward the bearer token upstream — the MCP server has no
+        # use for it and we don't want it appearing in any future request
+        # log the upstream might add.
+        proxy_set_header Authorization "";
+
+        proxy_pass http://127.0.0.1:7872/;
+
+        # Required for streaming transports (SSE + streamable-http)
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+
+        # HTTP/1.1 persistent connections
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+
+        # Standard proxy headers (Host / X-Forwarded-*); Authorization
+        # is intentionally NOT in this list — see proxy_set_header above.
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Long-lived streams
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# Alternative auth model: auth_request to gatekeeper itself
+# ──────────────────────────────────────────────────────────────────────
+# If you'd rather not maintain a static token list on disk, you can let
+# gatekeeper authenticate every MCP request via its own /authz endpoint
+# (the same path nginx auth_request uses for any other gatekeeper-fronted
+# service). Sketch:
+#
+#   location = /mcp-authz {
+#       internal;
+#       proxy_pass http://gatekeeper-backend:7843/authz;
+#       proxy_pass_request_body off;
+#       proxy_set_header Content-Length "";
+#       proxy_set_header X-Original-URI $request_uri;
+#       proxy_set_header X-Original-Method $request_method;
+#       proxy_set_header Authorization $http_authorization;
+#   }
+#
+#   location /mcp-gatekeeper/ {
+#       auth_request /mcp-authz;
+#       # rest as above
+#   }
+#
+# Then register a route in gatekeeper for the MCP path, create a client,
+# grant a permission, and use that client's credential as the bearer
+# token. The MCP becomes just another gatekeeper-protected service.
+#
+# NOTE: there's a known phase-ordering trap with auth_request + CORS
+# preflight using `auth_request_set + if/return 204`. Don't try that
+# pattern here — see the workspace memory entry on this trap.

@@ -1,0 +1,28 @@
+services:
+  mcp-gatekeeper:
+    image: ghcr.io/jmazzahacks/mcp-gatekeeper:latest
+    container_name: mcp-gatekeeper
+    restart: unless-stopped
+    ports:
+      # Bind only to localhost — nginx terminates TLS and proxies to here.
+      # If you're not running nginx in front, change to "7872:7872".
+      - "127.0.0.1:7872:7872"
+    # GATEKEEPER_BASE_URL and GATEKEEPER_ADMIN_TOKEN come from .env. The
+    # `env_file:` directive makes that dependency explicit — compose ALSO
+    # auto-loads ./.env for ${VAR} interpolation, but operators who don't
+    # know that habit end up exporting the token on the command line (where
+    # it lands in shell history). Setup: `cp env.example .env`, fill in
+    # real values, then `docker compose up`.
+    env_file:
+      - .env
+    environment:
+      # Network exposure — required for the 127.0.0.1:7872:7872 port mapping
+      # above to actually reach the container. The image defaults to 127.0.0.1
+      # (safe-by-default) so it's unreachable from the host until you set
+      # these to 0.0.0.0. These override any matching values in .env.
+      MCP_HOST: "0.0.0.0"
+      FASTMCP_HOST: "0.0.0.0"
+      # Other transport tunables (defaults are set in the image)
+      # MCP_TRANSPORT: "streamable-http"
+      # MCP_PORT: "7872"
+      # FASTMCP_PORT: "7872"
