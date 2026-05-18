@@ -19,7 +19,7 @@ Surfaces gatekeeper's `/api/admin` GET endpoints as MCP tools so an LLM client c
 | Env var | Required | Default (image) | Notes |
 |---|---|---|---|
 | `GATEKEEPER_BASE_URL` | yes | — | e.g. `https://gatekeeper.example.com` |
-| `GATEKEEPER_ADMIN_TOKEN` | yes | — | Aegis bearer token for a console-admin user |
+| `GATEKEEPER_ADMIN_API_KEY` | yes | — | Long-lived shared secret. Must match `GATEKEEPER_ADMIN_API_KEY` on the gatekeeper-backend. Sent via `X-Gatekeeper-Admin-Key` header. Read-only at the server. |
 | `GATEKEEPER_REQUEST_TIMEOUT_SECONDS` | no | `10` | HTTP request timeout in seconds |
 | `MCP_TRANSPORT` | no | `streamable-http` *(image)* / `stdio` *(direct)* | one of `stdio`, `streamable-http`, `sse`. The Docker image overrides the source default to `streamable-http` |
 | `MCP_HOST` | no | `127.0.0.1` | Bind address for streamable-http/sse. Image default is **safe-by-default** — compose example overrides to `0.0.0.0` to make the listener reachable through the port mapping. Ignored in stdio mode. |
@@ -40,7 +40,7 @@ python -m venv .
 source bin/activate
 pip install -e .
 GATEKEEPER_BASE_URL=https://gk.example.com \
-GATEKEEPER_ADMIN_TOKEN=<aegis-bearer-token> \
+GATEKEEPER_ADMIN_API_KEY=<value-from-gatekeeper-server-env> \
   mcp-gatekeeper
 ```
 
@@ -49,7 +49,7 @@ Then register with your MCP client (e.g. add to `.mcp.json` as a `stdio` server 
 ## Run remote (streamable-http behind nginx)
 
 1. `cp docker-compose.example.yml docker-compose.yml` and adjust if needed.
-2. `cp env.example .env` and fill in `GATEKEEPER_BASE_URL` + `GATEKEEPER_ADMIN_TOKEN`. **Do not** export these on the command line — `.env` is gitignored, shell history is not.
+2. `cp env.example .env` and fill in `GATEKEEPER_BASE_URL` + `GATEKEEPER_ADMIN_API_KEY`. **Do not** export these on the command line — `.env` is gitignored, shell history is not.
 3. `cp nginx/mcp-gatekeeper.conf.example` to your nginx sites-available, swap the domain + cert paths, and create the bearer-token include at `/etc/nginx/snippets/mcp-gatekeeper-tokens.map` per the comments in that file.
 4. `docker compose up -d` then `nginx -t && nginx -s reload`.
 

@@ -5,35 +5,35 @@ from mcp_gatekeeper.config import Config, read_bind
 
 def test_from_env_loads_all_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEKEEPER_BASE_URL", "https://gk.example.com/")
-    monkeypatch.setenv("GATEKEEPER_ADMIN_TOKEN", "tok")
+    monkeypatch.setenv("GATEKEEPER_ADMIN_API_KEY", "key")
     monkeypatch.setenv("GATEKEEPER_REQUEST_TIMEOUT_SECONDS", "7.5")
     monkeypatch.setenv("MCP_TRANSPORT", "streamable-http")
 
     config = Config.from_env()
 
     assert config.base_url == "https://gk.example.com"
-    assert config.admin_token == "tok"
+    assert config.admin_api_key == "key"
     assert config.request_timeout_seconds == 7.5
     assert config.transport == "streamable-http"
 
 
 def test_missing_base_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GATEKEEPER_BASE_URL", raising=False)
-    monkeypatch.setenv("GATEKEEPER_ADMIN_TOKEN", "tok")
+    monkeypatch.setenv("GATEKEEPER_ADMIN_API_KEY", "key")
     with pytest.raises(RuntimeError, match="GATEKEEPER_BASE_URL"):
         Config.from_env()
 
 
-def test_missing_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_admin_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEKEEPER_BASE_URL", "https://gk.example.com")
-    monkeypatch.delenv("GATEKEEPER_ADMIN_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="GATEKEEPER_ADMIN_TOKEN"):
+    monkeypatch.delenv("GATEKEEPER_ADMIN_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="GATEKEEPER_ADMIN_API_KEY"):
         Config.from_env()
 
 
 def test_bad_transport_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEKEEPER_BASE_URL", "https://gk.example.com")
-    monkeypatch.setenv("GATEKEEPER_ADMIN_TOKEN", "tok")
+    monkeypatch.setenv("GATEKEEPER_ADMIN_API_KEY", "key")
     monkeypatch.setenv("MCP_TRANSPORT", "telegrams")
     with pytest.raises(RuntimeError, match="MCP_TRANSPORT"):
         Config.from_env()
@@ -41,7 +41,7 @@ def test_bad_transport_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_default_transport_is_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEKEEPER_BASE_URL", "https://gk.example.com")
-    monkeypatch.setenv("GATEKEEPER_ADMIN_TOKEN", "tok")
+    monkeypatch.setenv("GATEKEEPER_ADMIN_API_KEY", "key")
     monkeypatch.delenv("MCP_TRANSPORT", raising=False)
     config = Config.from_env()
     assert config.transport == "stdio"
@@ -49,7 +49,7 @@ def test_default_transport_is_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_bad_timeout_raises_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEKEEPER_BASE_URL", "https://gk.example.com")
-    monkeypatch.setenv("GATEKEEPER_ADMIN_TOKEN", "tok")
+    monkeypatch.setenv("GATEKEEPER_ADMIN_API_KEY", "key")
     monkeypatch.setenv("GATEKEEPER_REQUEST_TIMEOUT_SECONDS", "not-a-number")
     with pytest.raises(RuntimeError, match="GATEKEEPER_REQUEST_TIMEOUT_SECONDS") as exc_info:
         Config.from_env()

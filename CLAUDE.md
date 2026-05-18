@@ -11,7 +11,7 @@ This server exposes **only** the gatekeeper's `GET /api/admin/*` endpoints (clie
 - **HTTP client**: delegated to the [`api-gatekeeper-api`](https://github.com/jmazzahacks/api-gatekeeper-api-python) Python lib. Don't reach for `httpx` directly in this codebase — use `GatekeeperClient` from the lib. The lib is the single source of truth for the gatekeeper REST contract.
 - **MCP framework**: [FastMCP](https://github.com/modelcontextprotocol/python-sdk) (high-level decorator API).
 - **Config**: env vars only, validated in `src/mcp_gatekeeper/config.py`. No config files.
-- **Auth**: an Aegis bearer token in `GATEKEEPER_ADMIN_TOKEN`; the user supplying the token must already have console-admin role on the target gatekeeper.
+- **Auth**: a long-lived admin API key in `GATEKEEPER_ADMIN_API_KEY`; must match the same env var on the gatekeeper-backend. Sent via the `X-Gatekeeper-Admin-Key` header. Read-only at the server (write methods on /api/admin/* still require an Aegis console-admin token, which this MCP never sends).
 
 ## Python environment
 

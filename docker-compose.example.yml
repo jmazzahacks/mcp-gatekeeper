@@ -13,7 +13,7 @@ services:
       # below — drop this volume + the env var if your Loki uses a publicly-
       # trusted cert.
       - ./certs/loki-ca.pem:/app/certs/loki-ca.pem:ro
-    # GATEKEEPER_BASE_URL and GATEKEEPER_ADMIN_TOKEN come from .env. The
+    # GATEKEEPER_BASE_URL and GATEKEEPER_ADMIN_API_KEY come from .env. The
     # `env_file:` directive makes that dependency explicit — compose ALSO
     # auto-loads ./.env for ${VAR} interpolation, but operators who don't
     # know that habit end up exporting the token on the command line (where

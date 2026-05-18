@@ -28,7 +28,7 @@ def read_bind() -> tuple[str, int]:
 @dataclass(frozen=True)
 class Config:
     base_url: str
-    admin_token: str
+    admin_api_key: str
     request_timeout_seconds: float
     transport: str
     host: str
@@ -42,11 +42,11 @@ class Config:
                 "GATEKEEPER_BASE_URL is required (e.g. https://gatekeeper.example.com)"
             )
 
-        admin_token = os.environ.get("GATEKEEPER_ADMIN_TOKEN", "")
-        if not admin_token:
+        admin_api_key = os.environ.get("GATEKEEPER_ADMIN_API_KEY", "")
+        if not admin_api_key:
             raise RuntimeError(
-                "GATEKEEPER_ADMIN_TOKEN is required (Aegis bearer token for a "
-                "user with console-admin role on the target gatekeeper)"
+                "GATEKEEPER_ADMIN_API_KEY is required — must match the "
+                "GATEKEEPER_ADMIN_API_KEY env var set on the gatekeeper-backend"
             )
 
         timeout_raw = os.environ.get("GATEKEEPER_REQUEST_TIMEOUT_SECONDS", "10")
@@ -67,7 +67,7 @@ class Config:
 
         return Config(
             base_url=base_url,
-            admin_token=admin_token,
+            admin_api_key=admin_api_key,
             request_timeout_seconds=timeout,
             transport=transport,
             host=host,

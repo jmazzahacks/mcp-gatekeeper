@@ -54,7 +54,7 @@ async def lifespan(_: FastMCP) -> AsyncIterator[None]:
     config = Config.from_env()
     _CLIENT = GatekeeperClient(
         base_url=config.base_url,
-        admin_token=config.admin_token,
+        admin_api_key=config.admin_api_key,
         timeout=config.request_timeout_seconds,
     )
     try:
