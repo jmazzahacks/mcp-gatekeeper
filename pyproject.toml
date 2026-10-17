@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-gatekeeper"
-version = "0.6.0"
+version = "0.6.1"
 description = "Read-only MCP server for ApiGatekeeper instances"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ authors = [
 keywords = ["mcp", "api-gatekeeper", "model-context-protocol"]
 
 dependencies = [
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.2.0,<2",
     "api-gatekeeper-api @ git+https://github.com/jmazzahacks/api-gatekeeper-api-python.git",
     "byteforge-loki-logging @ git+https://github.com/jmazzahacks/byteforge-loki-logging.git",
 ]
